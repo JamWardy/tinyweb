@@ -53,7 +53,9 @@ class Response:
             self.body = self.body.encode("utf-8")
         # A copy, so a dict the view uses again isn't changed under it.
         self.headers = dict(self.headers or {})
-        self.headers.setdefault("Content-Type", "text/html; charset=utf-8")
+        # A 304 has no body to have a type.
+        if self.status != 304:
+            self.headers.setdefault("Content-Type", "text/html; charset=utf-8")
 
     @property
     def reason(self):

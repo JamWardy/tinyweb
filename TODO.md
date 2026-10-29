@@ -23,7 +23,8 @@ the app's code answers it.
   whole `http` package, `http.HTTPStatus` included: status phrases are
   our own table, `REASONS` in `response.py`. Small building blocks are
   fine: `urllib.parse` for `%XX` and query strings, `mimetypes` for a
-  file's type, `hashlib` and `json`.
+  file's type, `email.utils` for dates in headers, `hashlib` and
+  `json`.
 - **The framework only, never the shop.** The shop imports tinyweb,
   never the other way round, as Flask knows nothing of the apps built
   on it. An app tells tinyweb what it needs, such as where its static
@@ -98,15 +99,48 @@ tests of its own here.
     images; large files would want streaming
   - The `404` is one helper, `not_found()`, for unknown paths and
     missing files alike
-- [ ] Part 5: caching. `Cache-Control` on static files, an `ETag` for
-      each (from its size and modification time, or a hash), and
-      `304 Not Modified` with no body when `If-None-Match` matches
+- [x] Part 5: caching, for static files, as RFC 9110 (HTTP) and 9111
+      (caching) say, and as Flask's `send_file` does. Each response
+      says which version of the file it is, and the browser sends that
+      back next time to ask if it's changed: `304 Not Modified` with no
+      body if not, the file with `200` if so. All in `send_static`,
+      after its `404` checks:
+  - `ETag`: a quoted tag from the file's modification time, size and
+    name, from `os.stat`, so a `304` never reads the file. Flask's is
+    made from the same, and nginx's from the time and size
+  - `Last-Modified`: the modification time, as a date such as `Wed, 29
+    Oct 2026 16:00:00 GMT`. RFC 9110 says to send it when there's a
+    date to send, and Flask, Django and nginx all do
+  - `Cache-Control: no-cache`, Flask's default: the browser keeps a
+    copy but asks every time, so an edit to `style.css` shows at once.
+    A long `max-age` is only safe once file names have a version in
+    them, as Django's `ManifestStaticFilesStorage` does; that can wait
+    for step 5's CDN
+  - `If-None-Match`, the tag the browser has: `304` if it's the file's.
+    One tag only; see "Known gaps"
+  - `If-Modified-Since`, the date the browser has: `304` if the file is
+    no newer, to the second. Only when there's no `If-None-Match`,
+    which comes first, as the RFC says
+  - A `304` has the `ETag`, `Last-Modified` and `Cache-Control` the
+    `200` would have, but no `Content-Type` and no `Content-Length`,
+    as there's no body: the RFC allows a `Content-Length` only if it's
+    the file's real size, and `App.__call__` would send `0`.
+    tinyhttp's `Content-Length: 0` on every `304` is its own gap, in
+    `../tinyhttp/TODO.md`
 - [ ] Part 6: the example app on a real server: on tinyhttp first, then
       on gunicorn, so tinyweb relies only on what WSGI promises and not
       on anything only tinyhttp does. That's done in
       `../tinyAmazonTest/`, and tracked in its `TODO.md`
 
 ## Known gaps
+
+- [ ] `If-None-Match` is compared with the `ETag` as one tag, so the
+      other forms the RFC allows never get `304`: a list, `"a", "b"`,
+      which a cache such as step 5's CDN may send for several versions
+      it holds; a weak tag, `W/"a"`, which should match `"a"`; and `*`,
+      for any version, used mainly with `PUT`. A browser sends the one
+      tag it was given, so it gets `304` as it should; the rest just
+      get `200` and the whole file
 
 - tinyhttp sends the body in reply to `HEAD`; gunicorn drops it (see
   `../tinyhttp/TODO.md`). tinyweb answers `HEAD` as it would `GET`, as
