@@ -41,7 +41,7 @@ hello-world page, a route that takes a value, and a `static/` folder.
 It's tested end to end, on tinyhttp, in `../tinyAmazonTest/`, not with
 tests of its own here.
 
-- [ ] Part 1: the package, `tinyweb/__init__.py`, and an `App` that's
+- [x] Part 1: the package, `tinyweb/__init__.py`, and an `App` that's
       itself a WSGI app: `__call__(environ, start_response)`. Then
       `example/`, with `app = App()` and a hello-world `/`
 - [ ] Part 2: routing. `@app.route("/items/<int:id>")` sends
