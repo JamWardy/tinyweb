@@ -82,7 +82,22 @@ tests of its own here.
       `/static/%2e%2e/` both fail, since tinyhttp decodes `%XX` first.
       The hello-world page gets a `style.css`. Later, step 5's reverse
       proxy serves `/static/` in front of the app, as nginx does for
-      Django, and the CDN caches it; this stays for running without them
+      Django, and the CDN caches it; this stays for running without them.
+      Decided while building it:
+  - An extension `mimetypes` doesn't know gets
+    `application/octet-stream`, just bytes, which a browser downloads
+  - Text files get no `charset`: nothing here says which encoding
+    they're in, so the browser decides
+  - `App(__name__, static_folder=None)` serves no static files, for an
+    app without any
+  - A symlink in the folder that points outside it gets `404`, as
+    checking the real path follows it
+  - The static route is added first, so it wins over an app's own
+    route under `/static/`
+  - The whole file is read into memory, which is fine for CSS and small
+    images; large files would want streaming
+  - The `404` is one helper, `not_found()`, for unknown paths and
+    missing files alike
 - [ ] Part 5: caching. `Cache-Control` on static files, an `ETag` for
       each (from its size and modification time, or a hash), and
       `304 Not Modified` with no body when `If-None-Match` matches

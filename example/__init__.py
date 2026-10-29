@@ -7,7 +7,7 @@ from html import escape
 
 from tinyweb import App, Response
 
-app = App()
+app = App(__name__)
 
 
 @app.route("/")
@@ -17,6 +17,7 @@ def index(request):
 <head>
   <meta charset="utf-8">
   <title>Hello from tinyweb</title>
+  <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <h1>Hello, world!</h1>

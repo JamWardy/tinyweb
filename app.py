@@ -6,15 +6,17 @@ headers, then returns the body as bytes. An App is one, so any WSGI server
 can run it, as gunicorn runs a Flask app.
 """
 
+import mimetypes
+import os
 import re
+import sys
 from dataclasses import dataclass
 from typing import Callable
 
 from tinyweb.request import Request
 from tinyweb.response import Response
 
-# Each kind of placeholder: the text it matches, and the function that turns
-# that text into the value the view is given. A new kind is one more line.
+# Each placeholder kind: the text it matches, and what turns it into a value.
 CONVERTERS = {
     "string": (r"[^/]+", str),      # Any text but a slash, and not none
     "int": (r"[0-9]+", int),        # A whole number; [0-9], so not "٥"
@@ -33,9 +35,7 @@ class Route:
     view: Callable          # The function that answers it
 
     def match(self, path):
-        """The values the placeholders take from path, by name, such as
-        {"id": 5}, or None if path isn't this route's.
-        """
+        """The values from path by name, such as {"id": 5}, or None."""
         found = self.pattern.fullmatch(path)
         if found is None:
             return None
@@ -44,10 +44,25 @@ class Route:
 
 
 class App:
-    def __init__(self):
+    def __init__(self, import_name, static_folder="static"):
+        """Pass __name__ as import_name, as with Flask.
+
+        static_folder is next to that module's file, served at /static/.
+        None turns it off.
+        """
         # A list, since /items/5 isn't a key: each Route is tried in turn,
         # and the first match wins.
         self.routes = []
+
+        # The folder of the file that made the App.
+        root = os.path.dirname(os.path.abspath(sys.modules[import_name].__file__))
+        if static_folder is None:
+            self.static_folder = None
+        else:
+            # Real, to compare with the real paths in send_static.
+            self.static_folder = os.path.realpath(os.path.join(root, static_folder))
+            # An ordinary route, so 405 and HEAD work as for any other.
+            self.route("/static/<path:filename>")(self.send_static)
 
     def route(self, path, methods=("GET",)):
         """A decorator that makes the function below it answer path.
@@ -97,13 +112,30 @@ class App:
                 return Response(result)
             return result
 
-        plain = {"Content-Type": "text/plain; charset=utf-8"}
         allowed = self.allowed_methods(request.path)
         if allowed:
             # Right path, wrong method. Allow says which would work.
             return Response("method not allowed\n", 405,
-                            {**plain, "Allow": ", ".join(sorted(allowed))})
-        return Response("not found\n", 404, plain)
+                            {**PLAIN, "Allow": ", ".join(sorted(allowed))})
+        return not_found()
+
+    def send_static(self, request, filename):
+        """The view for /static/<path:filename>: a file from static_folder."""
+        # filename is from the URL, so it can be ../app.py or /etc/passwd.
+        # realpath follows .. and symlinks to where the file really is.
+        path = os.path.realpath(os.path.join(self.static_folder, filename))
+        if os.path.commonpath([path, self.static_folder]) != self.static_folder:
+            return not_found()
+        # Missing, or a folder.
+        if not os.path.isfile(path):
+            return not_found()
+
+        with open(path, "rb") as file:
+            body = file.read()
+        # From the extension; unknown ones are sent as plain bytes.
+        content_type, _ = mimetypes.guess_type(path)
+        content_type = content_type or "application/octet-stream"
+        return Response(body, 200, {"Content-Type": content_type})
 
     def match(self, path, method):
         """Find the route that answers method on path.
@@ -131,12 +163,18 @@ class App:
         return allowed
 
 
-def compile_path(path):
-    """Turn a route's path into a regular expression, once, when it's added.
+PLAIN = {"Content-Type": "text/plain; charset=utf-8"}
 
-    "/items/<int:id>" becomes /items/(?P<id>[0-9]+), and {"id": int} to turn
-    what it matches into the value. The text between placeholders is
-    escaped, so a "." in "/files/<name>.txt" means a dot, not any character.
+
+def not_found():
+    """404, for an unknown path or a missing static file."""
+    return Response("not found\n", 404, PLAIN)
+
+
+def compile_path(path):
+    """Turn a route's path into a regex and its converters.
+
+    "/items/<int:id>" becomes /items/(?P<id>[0-9]+) and {"id": int}.
     """
     regex = ""
     converters = {}
@@ -150,6 +188,7 @@ def compile_path(path):
         if name in converters:
             raise ValueError(f"placeholder {name!r} twice in {path!r}")
         text, converters[name] = CONVERTERS[kind]
+        # Escaped, so the "." in "<name>.txt" is only a dot.
         regex += re.escape(path[end:placeholder.start()])
         regex += f"(?P<{name}>{text})"
         end = placeholder.end()
