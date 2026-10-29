@@ -6,22 +6,56 @@ headers, then returns the body as bytes. An App is one, so any WSGI server
 can run it, as gunicorn runs a Flask app.
 """
 
+import re
+from dataclasses import dataclass
+from typing import Callable
+
 from tinyweb.request import Request
 from tinyweb.response import Response
+
+# Each kind of placeholder: the text it matches, and the function that turns
+# that text into the value the view is given. A new kind is one more line.
+CONVERTERS = {
+    "string": (r"[^/]+", str),      # Any text but a slash, and not none
+    "int": (r"[0-9]+", int),        # A whole number; [0-9], so not "٥"
+    "path": (r".+", str),           # Like string, but slashes too
+}
+
+# A placeholder in a route's path: <name>, or <kind:name> such as <int:id>.
+PLACEHOLDER = re.compile(r"<(?:([A-Za-z_]\w*):)?([A-Za-z_]\w*)>")
+
+
+@dataclass
+class Route:
+    pattern: re.Pattern     # "/items/<int:id>" as /items/(?P<id>[0-9]+)
+    converters: dict        # Each placeholder's name to its function: {"id": int}
+    methods: set            # {"GET", "HEAD"}
+    view: Callable          # The function that answers it
+
+    def match(self, path):
+        """The values the placeholders take from path, by name, such as
+        {"id": 5}, or None if path isn't this route's.
+        """
+        found = self.pattern.fullmatch(path)
+        if found is None:
+            return None
+        return {name: convert(found[name])
+                for name, convert in self.converters.items()}
 
 
 class App:
     def __init__(self):
-        # (parts, methods, view) for each route. A list, since /items/5
-        # isn't a key: each is tried in turn, and the first match wins.
+        # A list, since /items/5 isn't a key: each Route is tried in turn,
+        # and the first match wins.
         self.routes = []
 
     def route(self, path, methods=("GET",)):
         """A decorator that makes the function below it answer path.
 
         The function is given the Request, then each value taken from the
-        path by a part in <...>, by name: <int:id> takes a whole number,
-        and <name> any text. It returns a string for a page, or a Response.
+        path by a placeholder in <...>, by name: <int:id> takes a whole
+        number, <path:name> any text with slashes, and <name> any text
+        without. It returns a string for a page, or a Response.
 
             @app.route("/items/<int:id>")
             def item(request, id):
@@ -30,21 +64,21 @@ class App:
         It answers only the methods given, GET by default, so two routes
         can share a path: GET /basket to show it, POST /basket to add.
         """
-        parts = parse_path(path)
+        pattern, converters = compile_path(path)
         methods = {method.upper() for method in methods}
         # HEAD is GET without the body, which the server drops, as with Flask.
         if "GET" in methods:
             methods.add("HEAD")
 
         def register(view):
-            self.routes.append((parts, methods, view))
+            self.routes.append(Route(pattern, converters, methods, view))
             # Unchanged, so the name still means the function.
             return view
         return register
 
     def __call__(self, environ, start_response):
         """Answer one request: the WSGI entry point the server calls."""
-        request = Request(environ)
+        request = Request.from_environ(environ)
         response = self.respond(request)
 
         headers = list(response.headers.items())
@@ -77,13 +111,12 @@ class App:
         Returns (view, values): the route's function, and the values taken
         from the path, by name. Returns (None, None) if no route matches.
         """
-        parts = path.split("/")
-        for pattern, methods, view in self.routes:
-            if method not in methods:
+        for route in self.routes:
+            if method not in route.methods:
                 continue
-            values = match_parts(pattern, parts)
+            values = route.match(path)
             if values is not None:
-                return view, values
+                return route.view, values
         return None, None
 
     def allowed_methods(self, path):
@@ -91,69 +124,34 @@ class App:
 
         Empty if no route has this path, for a 404; otherwise a 405's Allow.
         """
-        parts = path.split("/")
         allowed = set()
-        for pattern, methods, _ in self.routes:
-            if match_parts(pattern, parts) is not None:
-                allowed |= methods
+        for route in self.routes:
+            if route.match(path) is not None:
+                allowed |= route.methods
         return allowed
 
 
-def to_int(text):
-    """The <int:...> placeholder: a whole number, such as 5."""
-    # isdigit alone also takes other scripts' digits, such as "٥".
-    if text.isascii() and text.isdigit():
-        return int(text)
-    return None
+def compile_path(path):
+    """Turn a route's path into a regular expression, once, when it's added.
 
-
-def to_str(text):
-    """The <...> placeholder: any text, but not none at all."""
-    return text if text else None
-
-
-# Each converter returns None when the text doesn't fit, so no match.
-CONVERTERS = {"int": to_int, "str": to_str}
-
-
-def parse_path(path):
-    """Split a route's path into parts, for match_parts.
-
-    "/items/<int:id>" becomes ["", "items", (to_int, "id")]: plain parts
-    stay as text, and each placeholder becomes its converter and name.
+    "/items/<int:id>" becomes /items/(?P<id>[0-9]+), and {"id": int} to turn
+    what it matches into the value. The text between placeholders is
+    escaped, so a "." in "/files/<name>.txt" means a dot, not any character.
     """
-    parts = []
-    for part in path.split("/"):
-        if part.startswith("<") and part.endswith(">"):
-            kind, colon, name = part[1:-1].partition(":")
-            if not colon:
-                kind, name = "str", kind
-            if kind not in CONVERTERS:
-                # At startup, so a typo such as <itn:id> isn't a quiet 404.
-                raise ValueError(f"unknown placeholder {kind!r} in {path!r}")
-            parts.append((CONVERTERS[kind], name))
-        else:
-            parts.append(part)
-    return parts
-
-
-def match_parts(pattern, parts):
-    """Compare a route's parts with a request path's, one by one.
-
-    Returns the values the placeholders took, by name, such as {"id": 5},
-    or None if the path doesn't match.
-    """
-    if len(pattern) != len(parts):
-        return None
-    values = {}
-    for want, got in zip(pattern, parts):
-        if isinstance(want, str):
-            if want != got:
-                return None
-        else:
-            convert, name = want
-            value = convert(got)
-            if value is None:
-                return None
-            values[name] = value
-    return values
+    regex = ""
+    converters = {}
+    end = 0
+    for placeholder in PLACEHOLDER.finditer(path):
+        kind, name = placeholder.groups()
+        kind = kind or "string"
+        # At startup, so a typo such as <itn:id> isn't a quiet 404.
+        if kind not in CONVERTERS:
+            raise ValueError(f"unknown placeholder {kind!r} in {path!r}")
+        if name in converters:
+            raise ValueError(f"placeholder {name!r} twice in {path!r}")
+        text, converters[name] = CONVERTERS[kind]
+        regex += re.escape(path[end:placeholder.start()])
+        regex += f"(?P<{name}>{text})"
+        end = placeholder.end()
+    regex += re.escape(path[end:])
+    return re.compile(regex), converters

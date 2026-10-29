@@ -4,6 +4,8 @@ A string is sent as an HTML page with 200 OK. For anything else, such as
 a redirect, an error or JSON, a view returns a Response.
 """
 
+from dataclasses import dataclass
+
 # The words that go with each status, for the status line, as in
 # "404 Not Found". Only the ones the plan uses; add others as needed. The
 # first digit is the kind: 2 worked, 3 look elsewhere, 4 the client's
@@ -33,17 +35,27 @@ REASONS = {
 }
 
 
+@dataclass
 class Response:
-    def __init__(self, body="", status=200, headers=None):
-        """body is text or bytes, status a number, headers a dict.
+    """body is text or bytes, status a number, headers a dict.
 
-            return Response("", status=303, headers={"Location": "/"})
-        """
-        if status not in REASONS:
+        return Response("", status=303, headers={"Location": "/"})
+    """
+    body: bytes = b""       # Text is encoded as UTF-8
+    status: int = 200       # 404
+    headers: dict = None    # Content-Type is HTML unless given
+
+    def __post_init__(self):
+        if self.status not in REASONS:
             # Here, so a typo such as 4040 fails in the view that made it.
-            raise ValueError(f"unknown status {status}; add it to REASONS")
-        self.body = body.encode("utf-8") if isinstance(body, str) else body
-        self.status = status
-        self.reason = REASONS[status]
-        self.headers = dict(headers or {})
+            raise ValueError(f"unknown status {self.status}; add it to REASONS")
+        if isinstance(self.body, str):
+            self.body = self.body.encode("utf-8")
+        # A copy, so a dict the view uses again isn't changed under it.
+        self.headers = dict(self.headers or {})
         self.headers.setdefault("Content-Type", "text/html; charset=utf-8")
+
+    @property
+    def reason(self):
+        """The words for the status line: "Not Found" for 404."""
+        return REASONS[self.status]

@@ -55,14 +55,34 @@ tests of its own here.
       method, path, query parsed into a dict (`urllib.parse`), headers
       and body; a view returns a string, or a response with a status,
       headers and body
-- [ ] Part 4: static files. `App` takes the app's static folder, by
-      default `static/` next to the file that made the `App`, as
-      Flask's `static_folder` does. `GET /static/style.css` serves the
-      file from it, with a `Content-Type` from the extension
-      (`mimetypes`), `404` if it's missing, and never a file outside
-      the folder: check the real path after joining, so `/static/../`
-      and `/static/%2e%2e/` both fail, since tinyhttp decodes `%XX`
-      first
+- [x] Before Part 4, rework Parts 1 to 3 for quality, so new features
+      don't mean editing the matcher each time:
+  - Matching: compile each route to one regular expression (`re`)
+    when it's added, as Werkzeug does. Each converter is a pattern and
+    a function: `string` is `[^/]+` then `str`, `int` is `[0-9]+` then
+    `int`, and a new `path` is `.+` then `str`, slashes included. The
+    plain text is `re.escape`d. Then `/files/<name>.txt` works, and a
+    new converter is one line, not a change to `match_parts`. Rename
+    `<str:...>` to `<string:...>` while there, as Flask has it
+  - Dataclasses: a `Route` (pattern, converters, methods, view) in
+    place of the `(parts, methods, view)` tuples, as tinyhttp's
+    `Request` is one. Check `Request` and `Response` for the same:
+    such as `Request.from_environ(environ)`, as tinyhttp has
+    `parse_head`
+  - The example still answers every route as before
+- [ ] Part 4: static files. `App(__name__)`, as Flask's, says which
+      module made it, and its static folder is by default `static/`
+      next to that module's file, as Flask's `static_folder` is. The
+      `App` adds `/static/<path:filename>` itself, as an ordinary route
+      with a view of its own, as Flask does, so `405` and `HEAD` work
+      as for any route. `GET /static/style.css` serves the file, with a
+      `Content-Type` from the extension (`mimetypes`), `404` if it's
+      missing or a folder, and never a file outside the folder: check
+      the real path after joining, so `/static/../` and
+      `/static/%2e%2e/` both fail, since tinyhttp decodes `%XX` first.
+      The hello-world page gets a `style.css`. Later, step 5's reverse
+      proxy serves `/static/` in front of the app, as nginx does for
+      Django, and the CDN caches it; this stays for running without them
 - [ ] Part 5: caching. `Cache-Control` on static files, an `ETag` for
       each (from its size and modification time, or a hash), and
       `304 Not Modified` with no body when `If-None-Match` matches
