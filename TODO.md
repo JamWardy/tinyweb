@@ -44,12 +44,11 @@ tests of its own here.
 - [x] Part 1: the package, `tinyweb/__init__.py`, and an `App` that's
       itself a WSGI app: `__call__(environ, start_response)`. Then
       `example/`, with `app = App()` and a hello-world `/`
-- [ ] Part 2: routing. `@app.route("/items/<int:id>")` sends
+- [x] Part 2: routing. `@app.route("/items/<int:id>")` sends
       `GET /items/5` to that route's function with `id=5`; unknown
       paths get `404`, and a known path with the wrong method `405`
-      with an `Allow` header. `PATH_INFO` is bytes held in a latin-1
-      string (PEP 3333), so encode it as latin-1 and decode it as UTF-8
-      before matching: tinyhttp hands `/café` over as `/caf\xc3\xa9`
+      with an `Allow` header. Paths that aren't ASCII are left for
+      later; see "Known gaps"
 - [ ] Part 3: what a view gets and returns. A request object with the
       method, path, query parsed into a dict (`urllib.parse`), headers
       and body; a view returns a string, or a response with a status,
@@ -75,3 +74,9 @@ tests of its own here.
 - tinyhttp sends the body in reply to `HEAD`; gunicorn drops it (see
   `../tinyhttp/TODO.md`). tinyweb answers `HEAD` as it would `GET`, as
   Flask does, and leaves dropping the body to the server.
+- [ ] Paths that aren't ASCII never match. `PATH_INFO` is bytes held in
+      a latin-1 string (PEP 3333), so tinyhttp hands `/café` over as
+      `/caf\xc3\xa9`, which a `/café` route never equals. The fix is to
+      encode it as latin-1 and decode it as UTF-8 before matching, with
+      a `400` for bytes that aren't UTF-8. Nice to have: the shop's
+      paths are all ASCII, such as `/products/5`.
