@@ -70,7 +70,7 @@ tests of its own here.
     such as `Request.from_environ(environ)`, as tinyhttp has
     `parse_head`
   - The example still answers every route as before
-- [ ] Part 4: static files. `App(__name__)`, as Flask's, says which
+- [x] Part 4: static files. `App(__name__)`, as Flask's, says which
       module made it, and its static folder is by default `static/`
       next to that module's file, as Flask's `static_folder` is. The
       `App` adds `/static/<path:filename>` itself, as an ordinary route
