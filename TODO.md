@@ -19,9 +19,11 @@ the app's code answers it.
   "as Flask does", are fine.
 - **No shortcuts from the standard library either.** `wsgiref`,
   `http.server` and `http.cookies` already do parts of this repo's job,
-  so none of them are used here, not even in part. Small building
-  blocks are fine: `urllib.parse` for `%XX` and query strings,
-  `mimetypes` for a file's type, `hashlib` and `json`.
+  so none of them are used here, not even in part. That goes for the
+  whole `http` package, `http.HTTPStatus` included: status phrases are
+  our own table, `REASONS` in `response.py`. Small building blocks are
+  fine: `urllib.parse` for `%XX` and query strings, `mimetypes` for a
+  file's type, `hashlib` and `json`.
 - **The framework only, never the shop.** The shop imports tinyweb,
   never the other way round, as Flask knows nothing of the apps built
   on it. An app tells tinyweb what it needs, such as where its static
@@ -49,7 +51,7 @@ tests of its own here.
       paths get `404`, and a known path with the wrong method `405`
       with an `Allow` header. Paths that aren't ASCII are left for
       later; see "Known gaps"
-- [ ] Part 3: what a view gets and returns. A request object with the
+- [x] Part 3: what a view gets and returns. A request object with the
       method, path, query parsed into a dict (`urllib.parse`), headers
       and body; a view returns a string, or a response with a status,
       headers and body

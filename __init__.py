@@ -5,3 +5,5 @@ It does Flask's job: the server hands it each request through WSGI
 """
 
 from tinyweb.app import App
+from tinyweb.request import Request
+from tinyweb.response import Response

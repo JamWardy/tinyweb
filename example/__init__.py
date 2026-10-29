@@ -5,13 +5,13 @@ From tinyAmazon/, `python -m tinyhttp tinyweb.example:app` serves it.
 
 from html import escape
 
-from tinyweb import App
+from tinyweb import App, Response
 
 app = App()
 
 
 @app.route("/")
-def index():
+def index(request):
     return """<!doctype html>
 <html lang="en">
 <head>
@@ -27,12 +27,36 @@ def index():
 
 
 @app.route("/items/<int:id>")
-def item(id):
+def item(request, id):
     return f"<h1>Item {id}</h1>\n"
 
 
 @app.route("/hello/<name>")
-def hello(name):
-    # name comes from the URL, so anyone can put <script> in it. escape
-    # turns < into &lt; and so on, so it shows as text instead of running.
+def hello(request, name):
+    # Anyone can put <script> in a URL, so escape it to show as text.
     return f"<h1>Hello, {escape(name)}!</h1>\n"
+
+
+@app.route("/search")
+def search(request):
+    q = request.args.get("q", "")
+    return f"<p>You searched for: {escape(q)}</p>\n"
+
+
+@app.route("/greet", methods=["GET", "POST"])
+def greet(request):
+    # GET shows the form, and POST is the form sent back.
+    if request.method == "POST":
+        name = request.form.get("name", "")
+        return f"<h1>Hello, {escape(name)}!</h1>\n"
+    return """<form method="post">
+  <input name="name" placeholder="Your name">
+  <button>Greet me</button>
+</form>
+"""
+
+
+@app.route("/home")
+def home(request):
+    # 301: this page has moved for good, to Location.
+    return Response("", 301, {"Location": "/"})

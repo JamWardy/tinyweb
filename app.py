@@ -1,85 +1,75 @@
 """The App: the framework's side of WSGI.
 
-A WSGI app is any callable app(environ, start_response). The server calls
-it once per request with environ, a dict describing the request. The app
-calls start_response with the status and headers, then returns the body
-as an iterable of bytes. An App is one of these, so a server runs it
-without knowing it's made with tinyweb, as gunicorn runs a Flask app.
+A WSGI app is any callable app(environ, start_response): the server calls
+it once per request, and it calls start_response with the status and
+headers, then returns the body as bytes. An App is one, so any WSGI server
+can run it, as gunicorn runs a Flask app.
 """
+
+from tinyweb.request import Request
+from tinyweb.response import Response
 
 
 class App:
     def __init__(self):
-        # Each route the app answers, in the order they were added: its
-        # path split into parts by parse_path, the methods it takes, and
-        # the function that answers it. A list, not a dict, since /items/5
-        # isn't a key: each route is tried in turn, and the first that
-        # matches wins.
+        # (parts, methods, view) for each route. A list, since /items/5
+        # isn't a key: each is tried in turn, and the first match wins.
         self.routes = []
 
     def route(self, path, methods=("GET",)):
         """A decorator that makes the function below it answer path.
 
-        A part of the path in <...> takes a value from the request's path
-        and passes it to the function by name: <int:id> takes a whole
-        number, and <name> any text.
+        The function is given the Request, then each value taken from the
+        path by a part in <...>, by name: <int:id> takes a whole number,
+        and <name> any text. It returns a string for a page, or a Response.
 
             @app.route("/items/<int:id>")
-            def item(id):
+            def item(request, id):
                 return f"<h1>Item {id}</h1>"
 
-        It answers only the methods given, GET by default. Two routes can
-        share a path with different methods, so GET /basket shows the
-        basket and POST /basket adds to it.
+        It answers only the methods given, GET by default, so two routes
+        can share a path: GET /basket to show it, POST /basket to add.
         """
-        # Split now, once, rather than on every request.
         parts = parse_path(path)
         methods = {method.upper() for method in methods}
-        # HEAD asks for what GET would send, without the body, so a route
-        # that takes GET takes HEAD too. Dropping the body is the server's
-        # job, as with Flask: gunicorn does it, though tinyhttp doesn't yet.
+        # HEAD is GET without the body, which the server drops, as with Flask.
         if "GET" in methods:
             methods.add("HEAD")
 
         def register(view):
             self.routes.append((parts, methods, view))
-            # Hand the function back unchanged, so it can still be called.
+            # Unchanged, so the name still means the function.
             return view
         return register
 
     def __call__(self, environ, start_response):
         """Answer one request: the WSGI entry point the server calls."""
-        path = environ["PATH_INFO"]
-        view, values = self.match(path, environ["REQUEST_METHOD"])
-        headers = []
-        if view is not None:
-            status = "200 OK"
-            content_type = "text/html; charset=utf-8"
-            # The values from the path become the function's arguments:
-            # {"id": 5} calls view(id=5).
-            text = view(**values)
-        else:
-            content_type = "text/plain; charset=utf-8"
-            allowed = self.allowed_methods(path)
-            if allowed:
-                # The path is right, but not the method, such as DELETE on
-                # a page. Allow tells the client which methods would work.
-                status = "405 Method Not Allowed"
-                text = "method not allowed\n"
-                headers.append(("Allow", ", ".join(sorted(allowed))))
-            else:
-                status = "404 Not Found"
-                text = "not found\n"
+        request = Request(environ)
+        response = self.respond(request)
 
-        # WSGI bodies are bytes, and Content-Length counts them, not
-        # characters. tinyhttp sets its own, but gunicorn passes ours on,
-        # and without one it has to stream the body in chunks instead.
-        body = text.encode("utf-8")
-        headers.append(("Content-Type", content_type))
-        headers.append(("Content-Length", str(len(body))))
-        start_response(status, headers)
-        # Any iterable of bytes will do; a list of one is the simplest.
-        return [body]
+        headers = list(response.headers.items())
+        # tinyhttp sets its own, but gunicorn passes ours on.
+        headers.append(("Content-Length", str(len(response.body))))
+        start_response(f"{response.status} {response.reason}", headers)
+        return [response.body]
+
+    def respond(self, request):
+        """Run the view for request, and return its Response."""
+        view, values = self.match(request.path, request.method)
+        if view is not None:
+            # {"id": 5} calls view(request, id=5).
+            result = view(request, **values)
+            if isinstance(result, str):
+                return Response(result)
+            return result
+
+        plain = {"Content-Type": "text/plain; charset=utf-8"}
+        allowed = self.allowed_methods(request.path)
+        if allowed:
+            # Right path, wrong method. Allow says which would work.
+            return Response("method not allowed\n", 405,
+                            {**plain, "Allow": ", ".join(sorted(allowed))})
+        return Response("not found\n", 404, plain)
 
     def match(self, path, method):
         """Find the route that answers method on path.
@@ -89,8 +79,6 @@ class App:
         """
         parts = path.split("/")
         for pattern, methods, view in self.routes:
-            # A route with the right path but the wrong method is skipped,
-            # since a later one may have this path with this method.
             if method not in methods:
                 continue
             values = match_parts(pattern, parts)
@@ -101,8 +89,7 @@ class App:
     def allowed_methods(self, path):
         """Every method that some route for path takes.
 
-        Empty if no route has this path at all. For the Allow header of a
-        405, when the path is right but the method isn't.
+        Empty if no route has this path, for a 404; otherwise a 405's Allow.
         """
         parts = path.split("/")
         allowed = set()
@@ -114,8 +101,7 @@ class App:
 
 def to_int(text):
     """The <int:...> placeholder: a whole number, such as 5."""
-    # isdigit alone also takes digits from other scripts, such as "٥",
-    # which int() reads too, so /items/٥ would be item 5.
+    # isdigit alone also takes other scripts' digits, such as "٥".
     if text.isascii() and text.isdigit():
         return int(text)
     return None
@@ -126,9 +112,7 @@ def to_str(text):
     return text if text else None
 
 
-# Each kind of placeholder, and the function that checks and converts the
-# text it's given. Each returns None when the text doesn't fit, so the
-# route doesn't match.
+# Each converter returns None when the text doesn't fit, so no match.
 CONVERTERS = {"int": to_int, "str": to_str}
 
 
@@ -143,11 +127,9 @@ def parse_path(path):
         if part.startswith("<") and part.endswith(">"):
             kind, colon, name = part[1:-1].partition(":")
             if not colon:
-                # <name> on its own takes any text.
                 kind, name = "str", kind
             if kind not in CONVERTERS:
-                # Raised when the route is added, so a typo such as
-                # <itn:id> stops the app starting, rather than 404ing.
+                # At startup, so a typo such as <itn:id> isn't a quiet 404.
                 raise ValueError(f"unknown placeholder {kind!r} in {path!r}")
             parts.append((CONVERTERS[kind], name))
         else:
@@ -161,13 +143,11 @@ def match_parts(pattern, parts):
     Returns the values the placeholders took, by name, such as {"id": 5},
     or None if the path doesn't match.
     """
-    # /items/5/reviews has a part too many for /items/<int:id>.
     if len(pattern) != len(parts):
         return None
     values = {}
     for want, got in zip(pattern, parts):
         if isinstance(want, str):
-            # A plain part must be exactly the same.
             if want != got:
                 return None
         else:
