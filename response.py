@@ -61,3 +61,11 @@ class Response:
     def reason(self):
         """The words for the status line: "Not Found" for 404."""
         return REASONS[self.status]
+
+
+PLAIN = {"Content-Type": "text/plain; charset=utf-8"}
+
+
+def not_found():
+    """404, for an unknown path or a missing static file."""
+    return Response("not found\n", 404, PLAIN)
