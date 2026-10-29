@@ -11,12 +11,13 @@ without knowing it's made with tinyweb, as gunicorn runs a Flask app.
 class App:
     def __init__(self):
         # Each route the app answers, in the order they were added: its
-        # path split into parts by parse_path, and the function that
-        # answers it. A list, not a dict, since /items/5 isn't a key: each
-        # route is tried in turn, and the first that matches wins.
+        # path split into parts by parse_path, the methods it takes, and
+        # the function that answers it. A list, not a dict, since /items/5
+        # isn't a key: each route is tried in turn, and the first that
+        # matches wins.
         self.routes = []
 
-    def route(self, path):
+    def route(self, path, methods=("GET",)):
         """A decorator that makes the function below it answer path.
 
         A part of the path in <...> takes a value from the request's path
@@ -26,53 +27,89 @@ class App:
             @app.route("/items/<int:id>")
             def item(id):
                 return f"<h1>Item {id}</h1>"
+
+        It answers only the methods given, GET by default. Two routes can
+        share a path with different methods, so GET /basket shows the
+        basket and POST /basket adds to it.
         """
         # Split now, once, rather than on every request.
         parts = parse_path(path)
+        methods = {method.upper() for method in methods}
+        # HEAD asks for what GET would send, without the body, so a route
+        # that takes GET takes HEAD too. Dropping the body is the server's
+        # job, as with Flask: gunicorn does it, though tinyhttp doesn't yet.
+        if "GET" in methods:
+            methods.add("HEAD")
 
         def register(view):
-            self.routes.append((parts, view))
+            self.routes.append((parts, methods, view))
             # Hand the function back unchanged, so it can still be called.
             return view
         return register
 
     def __call__(self, environ, start_response):
         """Answer one request: the WSGI entry point the server calls."""
-        view, values = self.match(environ["PATH_INFO"])
-        if view is None:
-            status = "404 Not Found"
-            content_type = "text/plain; charset=utf-8"
-            text = "not found\n"
-        else:
+        path = environ["PATH_INFO"]
+        view, values = self.match(path, environ["REQUEST_METHOD"])
+        headers = []
+        if view is not None:
             status = "200 OK"
             content_type = "text/html; charset=utf-8"
             # The values from the path become the function's arguments:
             # {"id": 5} calls view(id=5).
             text = view(**values)
+        else:
+            content_type = "text/plain; charset=utf-8"
+            allowed = self.allowed_methods(path)
+            if allowed:
+                # The path is right, but not the method, such as DELETE on
+                # a page. Allow tells the client which methods would work.
+                status = "405 Method Not Allowed"
+                text = "method not allowed\n"
+                headers.append(("Allow", ", ".join(sorted(allowed))))
+            else:
+                status = "404 Not Found"
+                text = "not found\n"
 
         # WSGI bodies are bytes, and Content-Length counts them, not
         # characters. tinyhttp sets its own, but gunicorn passes ours on,
         # and without one it has to stream the body in chunks instead.
         body = text.encode("utf-8")
-        start_response(status, [
-            ("Content-Type", content_type),
-            ("Content-Length", str(len(body))),
-        ])
+        headers.append(("Content-Type", content_type))
+        headers.append(("Content-Length", str(len(body))))
+        start_response(status, headers)
         # Any iterable of bytes will do; a list of one is the simplest.
         return [body]
 
-    def match(self, path):
-        """Find the route that answers path.
+    def match(self, path, method):
+        """Find the route that answers method on path.
 
         Returns (view, values): the route's function, and the values taken
         from the path, by name. Returns (None, None) if no route matches.
         """
         parts = path.split("/")
-        for pattern, view in self.routes:
+        for pattern, methods, view in self.routes:
+            # A route with the right path but the wrong method is skipped,
+            # since a later one may have this path with this method.
+            if method not in methods:
+                continue
             values = match_parts(pattern, parts)
             if values is not None:
                 return view, values
         return None, None
+
+    def allowed_methods(self, path):
+        """Every method that some route for path takes.
+
+        Empty if no route has this path at all. For the Allow header of a
+        405, when the path is right but the method isn't.
+        """
+        parts = path.split("/")
+        allowed = set()
+        for pattern, methods, _ in self.routes:
+            if match_parts(pattern, parts) is not None:
+                allowed |= methods
+        return allowed
 
 
 def to_int(text):
